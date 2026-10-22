@@ -443,49 +443,7 @@ Suggested plan: calibration, then QAOA, then QSVC (basic and improved), then VQC
 ### 5.4 Worked example: the BEFORE and AFTER circuits on real hardware
 This example shows how to **build, print, transpile, save and submit** a BEFORE and an AFTER circuit on the same hardware, task and molecules. It contains no measured results: every number in it must come from your own run. The diagrams below are the logical circuits drawn with **symbolic parameters** (`a`, `b` are the scaled angles of two pairs, `x` the angles of one pair, `w` the trainable weights).
 
-**Step 1: create both circuits in code** (functions, not pasted images).
-```python
-import numpy as np
-from qiskit import QuantumCircuit
-from qiskit.circuit import ParameterVector
-
-def feature_map(x, variant="base"):
-    n = len(x); qc = QuantumCircuit(n)
-    for i in range(n):
-        qc.h(i); qc.rz(x[i], i)
-    if variant == "improved":
-        for i in range(n): qc.cz(i, (i + 1) % n)          # ring of CZ
-        for i in range(n): qc.ry(x[i], i)
-    return qc
-
-def kernel_circuit(x_i, x_j, variant="base"):
-    n = len(x_i); qc = QuantumCircuit(n, n)
-    qc.compose(feature_map(x_i, variant), inplace=True)
-    qc.compose(feature_map(x_j, variant).inverse(), inplace=True)
-    qc.measure(range(n), range(n))
-    return qc                                              # kernel entry = P("0"*n)
-
-def vqc_circuit(x, w, layers):
-    n = len(x); qc = QuantumCircuit(n, 1)
-    for i in range(n): qc.ry(x[i], i)
-    for l in range(layers):
-        for i in range(n): qc.ry(w[l * n + i], i)
-        for i in range(n - 2, -1, -1): qc.cx(i + 1, i)     # cascade into qubit 0
-    qc.measure(0, 0)
-    return qc                                              # P(class 1) = share of shots reading 1
-
-a, b = ParameterVector("a", 4), ParameterVector("b", 4)
-x4, w4 = ParameterVector("x", 4), ParameterVector("w", 4)
-x2, w2 = ParameterVector("x", 2), ParameterVector("w", 4)
-for name, circ in {
-    "QSVC BEFORE": kernel_circuit(a, b, "base"),
-    "QSVC AFTER":  kernel_circuit(a, b, "improved"),
-    "VQC BEFORE":  vqc_circuit(x4, w4, layers=1),          # all 4 features
-    "VQC AFTER":   vqc_circuit(x2, w2, layers=2),          # 2 QAOA-selected features
-}.items():
-    print(name); print(circ.draw("text", fold=200))
-```
-In your notebook, bind real values before submission (`assign_parameters` or build with floats) so every submitted circuit is fully bound and measured.
+**Step 1: create both circuits in code** (functions that take your features and parameters, not pasted images). Write one builder for the QSVC feature map and kernel (overlap) circuit and one for the VQC, each with a BASE and an IMPROVED variant as described in Section 5.1, so that the same function produces the circuit you print, transpile, save and submit. Build them first with symbolic parameters for printing and diagramming, then bind real values before submission (`assign_parameters` or build with floats) so every submitted circuit is fully bound and measured.
 
 **Step 2: print the logical circuits.** What `circuit.draw("text")` shows for the four designs (symbolic parameters):
 
