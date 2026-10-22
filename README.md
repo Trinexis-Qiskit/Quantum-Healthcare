@@ -459,7 +459,20 @@ q_3: ┤ H ├┤ Rz(a[3]) ├┤ Rz(-b[3]) ├┤ H ├─╫──╫──╫
      └───┘└──────────┘└───────────┘└───┘ ║  ║  ║ └╥┘
 c: 4/════════════════════════════════════╩══╩══╩══╩═
 ```
-QSVC kernel, AFTER (adds the CZ ring and an `Ry(x)` layer, and the inverse of both): the same skeleton, with four `CZ` gates (0-1, 1-2, 2-3, 3-0) and four `Ry` gates inserted in each of the two halves. Print it yourself; the logical depth is clearly larger than BEFORE.
+QSVC kernel, AFTER (the basic map plus a ring of `CZ` and an `Ry(x)` layer, in `U(x_i)` and again, inverted, for `U(x_j)^dagger`):
+```text
+     ┌───┐┌──────────┐                      ┌──────────┐┌───────────┐                                ┌───────────┐┌───┐┌─┐   
+q_0: ┤ H ├┤ Rz(a[0]) ├─■─────────────────■──┤ Ry(a[0]) ├┤ Ry(-b[0]) ├─■───────────────────────■──────┤ Rz(-b[0]) ├┤ H ├┤M├───
+     ├───┤├──────────┤ │    ┌──────────┐ │ ┌┴──────────┤└───────────┘ │                       │      ├───────────┤├───┤└╥┘┌─┐
+q_1: ┤ H ├┤ Rz(a[1]) ├─■──■─┤ Ry(a[1]) ├─┼─┤ Ry(-b[1]) ├──────────────┼──────────■────────────■──────┤ Rz(-b[1]) ├┤ H ├─╫─┤M├
+     ├───┤├──────────┤    │ └──────────┘ │ └┬──────────┤┌───────────┐ │          │      ┌───────────┐└───┬───┬───┘└┬─┬┘ ║ └╥┘
+q_2: ┤ H ├┤ Rz(a[2]) ├────■──────■───────┼──┤ Ry(a[2]) ├┤ Ry(-b[2]) ├─┼──■───────■──────┤ Rz(-b[2]) ├────┤ H ├─────┤M├──╫──╫─
+     ├───┤├──────────┤           │       │  ├──────────┤├───────────┤ │  │ ┌───────────┐└───┬───┬───┘    └┬─┬┘     └╥┘  ║  ║ 
+q_3: ┤ H ├┤ Rz(a[3]) ├───────────■───────■──┤ Ry(a[3]) ├┤ Ry(-b[3]) ├─■──■─┤ Rz(-b[3]) ├────┤ H ├─────────┤M├───────╫───╫──╫─
+     └───┘└──────────┘                      └──────────┘└───────────┘      └───────────┘    └───┘         └╥┘       ║   ║  ║ 
+c: 4/══════════════════════════════════════════════════════════════════════════════════════════════════════╩════════╩═══╩══╩═
+                                                                                                           3        2   0  1
+```
 
 VQC, BEFORE (4 qubits, one trainable layer, 4 weights):
 ```text
@@ -493,6 +506,16 @@ c: 1/═════════════════════════
 | VQC two-qubit gates (logical) | 3 `CX` | 2 `CX` |
 | Readout | Qubit 0 only; P(class 1) = share of shots reading 1 | Same |
 
+**Rendered figures** (logical circuits, symbolic parameters, saved in `figures/`):
+
+| QSVC BEFORE (basic map) | QSVC AFTER (improved map) |
+|---|---|
+| ![QSVC BEFORE logical circuit](figures/qsvc_before_logical.png) | ![QSVC AFTER logical circuit](figures/qsvc_after_logical.png) |
+
+| VQC BEFORE (4 features, 1 layer) | VQC AFTER (2 selected features, 2 layers) |
+|---|---|
+| ![VQC BEFORE logical circuit](figures/vqc_before_logical.png) | ![VQC AFTER logical circuit](figures/vqc_after_logical.png) |
+
 **Step 3: transpile for your real backend and print it.** Use the same backend, pass manager and (recommended) `initial_layout` for BEFORE and AFTER:
 ```python
 from qiskit.transpiler import generate_preset_pass_manager
@@ -503,6 +526,25 @@ for tag, c in {"BEFORE": isa_before, "AFTER": isa_after}.items():
     print(c.draw("text", fold=200)); c.draw("mpl", filename=f"figures/{tag.lower()}_isa.png")
 ```
 Expect gates to be rewritten into the device's native set (for IBM Heron/Eagle processors this is typically `Rz`, `sx`, `x` plus `cz` or `ecr`), `H` and `Ry` to expand into several native gates, the `cz` ring to need routing on a sparse coupling map, and the diagram to show the physical qubit each logical qubit was mapped to. Record the layout, depth and two-qubit count; they are part of your cost analysis and may explain differences between BEFORE and AFTER.
+
+**Illustration only (not your backend).** The figures below come from a local transpile onto a generic 4-qubit **line** coupling map with the basis `rz, sx, x, cz`; no hardware was used and nothing was executed. They show what to look for: `H` and `Ry` become `Rz`/`sx` sequences, and the ring `CZ` between qubits 3 and 0 needs extra two-qubit gates to route on a sparse map. Your real device, layout and counts will differ, and yours are the ones to report.
+
+| QSVC BEFORE, illustrative transpile | QSVC AFTER, illustrative transpile |
+|---|---|
+| ![QSVC BEFORE illustrative transpile](figures/qsvc_before_transpiled_illustrative.png) | ![QSVC AFTER illustrative transpile](figures/qsvc_after_transpiled_illustrative.png) |
+
+| VQC BEFORE, illustrative transpile | VQC AFTER, illustrative transpile |
+|---|---|
+| ![VQC BEFORE illustrative transpile](figures/vqc_before_transpiled_illustrative.png) | ![VQC AFTER illustrative transpile](figures/vqc_after_transpiled_illustrative.png) |
+
+| Circuit | Logical depth | Logical two-qubit gates | Illustrative-transpile depth | Illustrative-transpile two-qubit gates |
+|---|---|---|---|---|
+| QSVC BEFORE | 5 | 0 | 9 | 0 |
+| QSVC AFTER | 15 | 8 | 42 | 20 |
+| VQC BEFORE | 6 | 3 | 19 | 3 |
+| VQC AFTER | 6 | 2 | 18 | 2 |
+
+The table is a template for yours: in the notebook, print the same columns for your real backend (depth, two-qubit count, physical layout) for BEFORE and AFTER.
 
 **Step 4: save exactly what you submit, then run both on the same hardware.**
 ```python
