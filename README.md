@@ -52,7 +52,7 @@ The pipeline has four stages, and each one can fail independently:
 
 Why this is hard: many catalog structures share almost the same mass, so mass alone leaves a long list; fragment patterns are noisy and depend on adduct, instrument and collision energy; and you must score **molecules you have never seen**, so a model that memorises training molecules is useless.
 
-Why the quantum part is small: you have about 10 minutes of real QPU time. Quantum models therefore only **re-order the top-2 shortlist** of the classical ranker on a small, diversity-balanced cohort of final-test molecules, using 4 quantum features and 2 to 4 qubits. This is a feasibility experiment on real hardware, not a production system. The honest question is how the quantum methods behave next to a strong classical baseline on the same molecules, and what hardware noise does to them.
+Why the quantum part is small: you have about 10 minutes of real QPU time. Quantum models therefore only **re-order the top-2 shortlist** of the classical ranker on a small, diversity-balanced cohort of held-out internal-test molecules, using 4 quantum features and 2 to 4 qubits. This is a feasibility experiment on real hardware, not a production system. The honest question is how the quantum methods behave next to a strong classical baseline on the same molecules, and what hardware noise does to them.
 
 ### 1.5 Solution roadmap
 Work through these steps in order. Each produces something the next one needs.
@@ -63,8 +63,8 @@ Work through these steps in order. Each produces something the next one needs.
 | 2 | Verify the data checksums, audit the schema, build the leakage register | Hashes, schema audit, feature register | 3.1 to 3.4 |
 | 3 | Explore the data (spectra per molecule, adducts, instruments, masses, peaks) | EDA figures | 3.5 |
 | 4 | Adduct-aware neutral mass, candidate pools, pool recall on training molecules | Mass tolerance, pool statistics | 3.6, 4.1 |
-| 5 | Train M1 on the 400 training molecules; choose settings on the internal 100 | Frozen M1, controls, ablations | 4.1 |
-| 6 | **Freeze** (hashes, config), then score the sealed final 150 | Metrics with bootstrap intervals | 3.5, 6 |
+| 5 | Train M1 on the 400 training molecules; choose settings by group cross-validation inside the training set | Frozen M1, controls, ablations | 4.1 |
+| 6 | Evaluate on the internal 100, then **freeze** (hashes, config) and write top-25 predictions for the unlabelled final 150 | Internal-100 metrics with bootstrap intervals; final-150 predictions file | 3.5, 6 |
 | 7 | Build the frozen quantum cohort: queue, top-2 shortlists, train anchors, scaler | Frozen quantum inputs | 3.8 |
 | 8 | QPU preflight: quota, backend, physical qubits, confirm it is not a simulator; tiny calibration job | Backend and layout record | 5.3 |
 | 9 | QAOA on 4 qubits to choose 2 of 4 quantum features | Measured counts, selected mask | 4.3 |
@@ -84,7 +84,7 @@ How to decide when you finish:
 ### 1.6 Common mistakes to avoid
 - Splitting by spectrum instead of by molecule (all spectra of a molecule must stay on one side).
 - Using `molecule_id`, `spectrum_id`, `precursor_error_ppm`, `molecular_formula`, `ingest_lib`, `adduct_orig`, `canonical_identity` or any structure-derived value as a query-time model input.
-- Opening `final_test_150_labels.parquet` before the freeze, or retuning after you have seen final-test scores.
+- Changing a model after you have written the final-150 predictions, or retuning on the internal 100 after you have looked at its scores without labelling the change post-hoc. The final-test answers are held by the organisers; never try to recover them.
 - Fitting scalers, clipping bounds, percentile ranks, thresholds or the ranker on final-test molecules.
 - Pruning the candidate catalog with split knowledge (for example removing training structures).
 - Reporting a one-spectrum-per-row score. The official unit is the **molecule**.
@@ -157,7 +157,7 @@ Newer or older versions are acceptable if you print them in the notebook and say
 1. **One executed Jupyter notebook** (`.ipynb`, outputs saved, runs top to bottom without errors) containing the full classical and quantum workflow.
 2. **Evidence files**: IBM job IDs, raw measured counts, kernel matrices, metric tables, per-molecule ranked lists, figures, the saved circuits (QPY) and a usage ledger.
 3. **A findings section** at the end of the notebook stating which method you would choose and why, backed by your own numbers, including negative results.
-4. Predictions as CSV per method: one row per `molecule_id`, column `smiles` with up to 25 canonical, unique, semicolon-separated SMILES, best first.
+4. Predictions as CSV: `predictions_final_test_150_M1.csv` (required: one row per final-test `molecule_id`, column `smiles` with up to 25 canonical, unique, semicolon-separated SMILES, best first, written from your frozen M1) plus one CSV per method for the internal 100 or the quantum cohort. The organisers score the final-test file; no answers are provided to participants.
 5. The repository deliverables listed in `CONTRIBUTING.md` (README, `src/`, report, slides, demo video link).
 
 ### 2.2 What your solution must demonstrate
@@ -165,7 +165,7 @@ Newer or older versions are acceptable if you print them in the notebook and say
 | # | Outcome | How it is judged |
 |---|---|---|
 | 1 | A leakage-safe data pipeline: checksums, schema audit, feature register, molecule-level split, frozen configuration | Printed checks, hashes, documented exclusions |
-| 2 | One classical ML model (M1) with controls and ablations evaluated on the internal 100 and the sealed final 150 | MRR@25, Top-1, Hit@5, Hit@25, pool recall, bootstrap intervals |
+| 2 | One classical ML model (M1) with controls and ablations scored on the internal 100 (labelled) and used to predict the unlabelled final 150 | MRR@25, Top-1, Hit@5, Hit@25, pool recall, bootstrap intervals |
 | 3 | Two hybrid quantum models (M2 kernel, M3 QAOA plus VQC) on a real IBM backend | Job IDs, raw counts, QPU seconds, real backend name |
 | 4 | A fair comparison on **identical molecules and candidates** with identical decision rules | Same molecule IDs, same shortlists, paired bootstrap deltas versus M1 |
 | 5 | A circuit **BEFORE/AFTER** comparison on the same backend, molecules, shots and task, with all circuits **created in your notebook and printed** (logical and transpiled) | Printed diagrams, depth and two-qubit counts, paired predictions |
@@ -174,7 +174,7 @@ Newer or older versions are acceptable if you print them in the notebook and say
 | 8 | An end-goal scorecard comparing all methods on cost, accuracy, latency and risk | Final comparison table and chart |
 
 ### 2.3 Target to aim for
-- **M1** should clearly beat the three classical controls (random, mass-only, fingerprint-only) on the sealed final 150; say by how much and with which interval.
+- **M1** should clearly beat the three classical controls (random, mass-only, fingerprint-only) on the internal 100; say by how much and with which interval.
 - **Pool recall** is an upper bound on every method: report it and explain the molecules lost at the pool stage.
 - Quantum methods are judged on **correctness of execution and honesty of analysis**, not on beating M1. A well-measured, well-explained result that matches or falls short of the classical ranker is a valid outcome.
 - Do not claim quantum advantage; the quantum cohort is far too small to support it.
@@ -194,8 +194,7 @@ Experimental LC-MS/MS spectra from a public small-molecule tandem mass spectrome
 |---|---|---|---|
 | `train_400.parquet` | 3,423 spectra, 400 molecules | Spectra plus labels | Fit everything |
 | `internal_test_100.parquet` | 1,127 spectra, 100 molecules | Spectra plus labels | Model selection and development |
-| `final_test_150_inputs.parquet` | 1,620 spectra, 150 molecules | **Spectra only** | Sealed final test |
-| `final_test_150_labels.parquet` | 150 molecules | Answer key | **Final scoring only, after the freeze** |
+| `final_test_150_inputs.parquet` | 1,620 spectra, 150 molecules | **Spectra only, no labels** | Final test: predict and submit; scored by the organisers |
 | `structure_catalog.parquet` | 274,195 structures | SMILES, exact mass, formula, descriptors | Candidate bank |
 | `identity_manifest.parquet` | 650 molecules | Split, polarity, instrument group, stratum | Quantum queue, EDA |
 
@@ -229,9 +228,9 @@ Publish your feature register (every column, its group, your decision and why) i
 | Cohort | Molecules | Use |
 |---|---|---|
 | Train | 400 | Fit scalers, fingerprint models, ranker, quantum anchors and QUBO statistics. Use group k-fold over **molecules** inside it. |
-| Internal test | 100 | Model selection, hyperparameters, shortlist size. Report, but do not treat as sealed. |
-| Final test (sealed) | 150 | Scored once after the freeze. Inputs only until then. |
-| Quantum cohort | about 40 of the final 150 | Small matched cohort for M1/M2/M3 comparison on hardware (Section 3.8) |
+| Internal test | 100 (labelled) | Your evaluation set for M1, the controls and the quantum cohort. Choose hyperparameters by cross-validation inside the training set so this cohort stays clean. |
+| Final test | 150 (unlabelled) | Freeze your models, write top-25 predictions, submit them. Never used for fitting, scaling or tuning. |
+| Quantum cohort | about 40 of the internal 100 | Small matched cohort for M1/M2/M3 comparison on hardware (Section 3.8) |
 
 The split is **by molecule**. Do not mix spectra of one molecule across cohorts.
 
@@ -253,7 +252,7 @@ Quantum models cannot afford the full data. Draw a deterministic, label-free coh
 
 | Item | Recommended size | Definition |
 |---|---|---|
-| Frozen queue | all 150 final-test molecules | Round-robin over the `stratum` column of `identity_manifest.parquet`: sort by `(stratum, sha256(f"{SEED}:{molecule_id}"))`, number each molecule within its stratum, then sort by `(that number, hash)`. Uses observable metadata and a hash only, no labels and no model output. |
+| Frozen queue | all 100 internal-test molecules | Round-robin over the `stratum` column of `identity_manifest.parquet`: sort by `(stratum, sha256(f"{SEED}:{molecule_id}"))`, number each molecule within its stratum, then sort by `(that number, hash)`. Uses observable metadata and a hash only, no labels and no model output. |
 | Quantum test molecules `U` | first 40 queue molecules that have at least `K` candidates in their pool (skip and report any others) | Same molecules for every method |
 | Shortlist `K` | 2 | Top-K candidates by frozen M1 score (ties by SMILES). Gives `U*K` test pairs. |
 | Quantum train anchors | from training molecules | For each training molecule (hash order) whose truth is in the pool: one **positive** pair (true candidate) and one **hardest negative** pair (highest M1 score among wrong candidates; prefer out-of-fold scores). |
@@ -304,7 +303,7 @@ M1, M2 and M3 are mandatory. You may add extra baselines.
 6. **Ranker.** `LGBMRanker(objective="lambdarank")` with one query group per training molecule; skip training molecules whose truth is not in the pool and report how many. Select among a small pre-declared grid (for example 3 settings) by 5-fold **group** cross-validation on MRR@25.
 7. **Inference** (`rank_molecule`): all spectra in, consensus mass, pool, pair features, ranker score, top-25 unique SMILES out. No label access. Time it per molecule.
 8. **Controls and ablations** (all on identical molecules and pools): random order (seeded); mass only (smallest median ppm first); fingerprint likelihood only; M1 without spectral features (mass plus candidate descriptors); M1 without fragment features; **one representative spectrum versus all spectra**; shuffled-spectra order invariance (identical rankings required).
-9. **Reporting:** evaluation A (internal 100) and B (sealed final 150) with MRR@25, Top-1, Hit@5, Hit@25, pool recall, median pool size, mean Tanimoto of the top-1 candidate to the truth (scoring only), and p50/p95 latency per molecule. Add a short sensitivity note: how does pool recall react to the tolerance? Mark any change made after seeing final-test scores as **post-hoc and exploratory**.
+9. **Reporting:** on the internal 100 (labelled), report MRR@25, Top-1, Hit@5, Hit@25, pool recall, median pool size, mean Tanimoto of the top-1 candidate to the truth (scoring only), and p50/p95 latency per molecule. Add a short sensitivity note: how does pool recall react to the tolerance? Then freeze M1 and write the final-150 predictions (you cannot score them yourself). Mark any change made after seeing internal-100 scores as **post-hoc and exploratory**.
 
 ### 4.2 M2: QSVC on hardware
 Task for each shortlisted pair: classify "true candidate" (1) versus "wrong candidate" (0) from the 4 scaled angles; the SVM decision score re-orders the K candidates.
@@ -342,7 +341,7 @@ Keep these in one `config` cell at the top of the notebook. Deviate only **downw
 | Parameter | Value | Meaning |
 |---|---|---|
 | `SEED` | 2026 | Global seed (selection hashes, folds, optimiser, bootstrap) |
-| Cohorts | 400 / 100 / 150 | Train / internal / sealed final molecules |
+| Cohorts | 400 / 100 / 150 | Train / internal (labelled) / final (unlabelled, organiser-scored) molecules |
 | `TOP_K` | 25 | Length of the ranked list |
 | Pool cap | 600 | Maximum candidates per molecule |
 | `FP_BITS_SELECTED` | 96 | Fingerprint bits modelled by M1 |
@@ -575,8 +574,8 @@ You build this notebook. Every **code cell** must be preceded by a Markdown cell
 | 08 Aggregation | Order-invariant molecule features, shuffled-order test | Identical rankings |
 | 09 M1 training | Bits, OOF probabilities, pair table, ranker grid | Training record printed |
 | 10 M1 benchmark | Internal 100, controls, ablations, tolerance sensitivity | Tables and figures |
-| 11 Freeze | Model hash, catalog hash, config, quantum queue | Manifest written **before** final scoring |
-| 12 M1 final | Sealed final 150, intervals, failure decomposition (catalog, pool, ranking) | Metrics with intervals |
+| 11 Freeze | Model hash, catalog hash, config, quantum queue | Manifest written **before** the final-150 predictions are generated |
+| 12 Failure analysis and final predictions | Internal-100 failure decomposition (catalog, pool, ranking) with intervals; top-25 predictions for the final 150 from the frozen M1, saved and hashed | Predictions file written; no scoring |
 | 13 Quantum cohort | Queue, shortlists, anchors, scaler, shortlist recall | IDs saved |
 | 14 Hardware access | Authenticate, real backend, quota, layout, budget guard | Backend is not a simulator |
 | 15 Circuits before submit | BEFORE and AFTER circuits created, printed, transpiled, saved (QPY), metrics table | Diagrams and table shown |
@@ -606,7 +605,7 @@ Submit as described in `CONTRIBUTING.md` (fork, `submissions/GITHUB_USERNAME_NAM
 |---|---|---|
 | 1 | Clear problem statement and scope | Cover cell restating task, data, rules, limits, status flags |
 | 2 | Clear outcome and deliverables | Predictions CSVs, evidence files, findings, single-molecule demo |
-| 3 | Data use is correct and leakage-safe | Checksums, schema audit, feature register, molecule-level split, freeze before final scoring, pool and order-invariance checks |
+| 3 | Data use is correct and leakage-safe | Checksums, schema audit, feature register, molecule-level split, freeze before final predictions, pool and order-invariance checks |
 | 4 | Methodology comparison | M1, M2, M3 plus controls on identical molecules; metrics table with intervals; stated selection rule |
 | 5 | Real-hardware circuits, BEFORE/AFTER, within the QPU budget | Printed logical and transpiled circuits, depth and two-qubit tables, QPY files, job IDs, QPU seconds, non-simulator backend |
 | 6 | Technical explanation and insights | Six-field Markdown before every code cell, Insights after every output, saved figures |
@@ -615,7 +614,7 @@ Submit as described in `CONTRIBUTING.md` (fork, `submissions/GITHUB_USERNAME_NAM
 
 Final checklist before you open your pull request:
 - [ ] Notebook executed top to bottom with saved outputs
-- [ ] `final_test_150_labels.parquet` opened only after the freeze manifest was written
+- [ ] Final-150 predictions written only after the freeze manifest, from the frozen models, and included as `predictions_final_test_150_M1.csv`
 - [ ] All circuits created in code, printed, transpiled and saved (QPY) before submission to hardware
 - [ ] Every job ID re-queried and confirmed non-simulator, with shots matching
 - [ ] No API key, token or CRN anywhere in the repository

@@ -29,8 +29,7 @@ How the 650 molecules were chosen (for your methods section; you do not need to 
 |---|---|---|---|---|
 | `train_400.parquet` | 3,423 spectra | 400 | Fit every model (feature scaling, fingerprint models, rankers, quantum anchors) | Yes |
 | `internal_test_100.parquet` | 1,127 spectra | 100 | Development and model selection (your validation set) | Yes |
-| `final_test_150_inputs.parquet` | 1,620 spectra | 150 | **Sealed final test: query spectra only** | **No** |
-| `final_test_150_labels.parquet` | 150 molecules | 150 | **Answer key for the sealed final test. Open only after everything is frozen (Section 4).** | Yes |
+| `final_test_150_inputs.parquet` | 1,620 spectra | 150 | **Final test: query spectra only. No answers are provided; the organisers score your predictions.** | **No** |
 | `structure_catalog.parquet` | 274,195 structures | n/a | Candidate bank: every structure your ranker may propose | n/a (structures only) |
 | `identity_manifest.parquet` | 650 molecules | 650 | Observable per-molecule metadata and strata (no labels) | No |
 | `SHA256SUMS.txt` | n/a | n/a | Checksums of the files above | n/a |
@@ -78,15 +77,7 @@ These twelve columns are what a real analyst has for an unknown molecule. The te
 | `num_peaks` | Number of peaks (derivable from the arrays). |
 | `split` | `train` or `internal_test`. |
 
-### 3.3 `final_test_150_labels.parquet`
-| Column | Meaning |
-|---|---|
-| `molecule_id` | Joins to `final_test_150_inputs`. |
-| `canonical_identity` | Scoring key (tautomer-canonical InChIKey14). |
-| `inchikey14` | Official first 14 characters of the InChIKey. |
-| `normalized_smiles` | Reference structure (for drawing and reporting). |
-
-### 3.4 `structure_catalog.parquet` (candidate bank)
+### 3.3 `structure_catalog.parquet` (candidate bank)
 One row per distinct tautomer-canonical identity, sorted by `exact_mass` (the row position is your candidate index). It contains **no spectra, no split information and no link to any query**.
 
 | Column group | Columns |
@@ -106,7 +97,7 @@ gen = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=2048)
 fps = np.stack([gen.GetFingerprintAsNumPy(Chem.MolFromSmiles(s)).astype(np.uint8) for s in cat.smiles])  # row i = candidate i
 ```
 
-### 3.5 `identity_manifest.parquet`
+### 3.4 `identity_manifest.parquet`
 Observable metadata only: `molecule_id`, `split` (`train`, `internal_test`, `final_test`), `n_spectra`, `median_precursor_mz`, `polarity`, `instr_group` (`Orbitrap/FT`, `QTOF`, `timsTOF`, `other`, `unknown`), `n_adducts`, `mass_bin` (precursor-mass quartile 0 to 3) and `stratum` (`m<bin>|<polarity>|<instrument group>`). Use `stratum` to build the deterministic quantum-cohort queue (main README, Section 3.8).
 
 ---
@@ -116,16 +107,17 @@ Observable metadata only: `molecule_id`, `split` (`train`, `internal_test`, `fin
 | Phase | Allowed files | Rule |
 |---|---|---|
 | Feature design, fingerprint models, ranker, scaler, quantum anchors, QUBO statistics | `train_400` (+ `structure_catalog`) | Fit on training molecules only. Use cross-fitting (group folds by molecule) wherever a train-side score is later used as a feature. |
-| Hyperparameter choice, model selection, thresholds, shortlist size | `internal_test_100` (and cross-validation inside `train_400`) | Choose settings here, then freeze them. |
-| Freeze | n/a | Save model hash, catalog hash, configuration and the quantum queue **before** opening any final-test label. |
-| Final scoring | `final_test_150_inputs` + `final_test_150_labels` | Open the labels once, after the freeze. Do not retune afterwards. If you change anything, disclose it as post-hoc and mark the numbers exploratory. |
+| Hyperparameter choice, model selection, thresholds, shortlist size | Cross-validation inside `train_400` (group folds by molecule) | Choose settings here, then freeze them. |
+| Evaluation | `internal_test_100` (labelled) | Report metrics here and draw the quantum cohort from it. Do not tune on it without labelling the change post-hoc. |
+| Freeze | n/a | Save model hash, catalog hash, configuration and the quantum queue **before** generating the final-test predictions. |
+| Final predictions | `final_test_150_inputs` | Write top-25 predictions for each `molecule_id` from the frozen models and submit them. The organisers score them. Do not retune afterwards; if you change anything, disclose it. |
 
 Further rules:
 - **A prediction is per molecule, not per spectrum.** For each `molecule_id`, use all its spectra and output one ranked list of at most 25 valid, unique SMILES. The result must not depend on the order of spectra.
 - **Candidates come only from `structure_catalog`.** Do not prune it using split knowledge (for example, do not remove the structures of training molecules), so that all teams are comparable.
 - **Score by identity:** two SMILES are the same molecule if their tautomer-canonical InChIKey14 match (RDKit `TautomerEnumerator().Canonicalize`, then `Chem.MolToInchiKey(mol)[:14]`).
 - `final_test_150_inputs` must never be used for fitting, imputation, scaling or threshold selection (no transductive tricks).
-- The quantum cohort is a small subset of the final-test molecules (main README, Section 3.8). It is not a separate file.
+- The quantum cohort is a small subset of the internal-test molecules (main README, Section 3.8). It is not a separate file.
 
 ---
 
@@ -170,8 +162,6 @@ inner  = pd.read_parquet("data/internal_test_100.parquet")
 final_x = pd.read_parquet("data/final_test_150_inputs.parquet")     # inputs only
 catalog = pd.read_parquet("data/structure_catalog.parquet")
 manifest = pd.read_parquet("data/identity_manifest.parquet")
-# Open this ONLY after your models, catalog hash, config and quantum queue are frozen:
-# final_y = pd.read_parquet("data/final_test_150_labels.parquet")
 
 assert not ({"canonical_identity", "normalized_smiles", "inchikey14"} & set(final_x.columns))
 ```
@@ -183,5 +173,5 @@ assert not ({"canonical_identity", "normalized_smiles", "inchikey14"} & set(fina
 1. Use **only** the files in this folder. No external spectra, structures, fingerprints, embeddings, pretrained models or any other dataset.
 2. Do not try to re-identify molecules or map identifiers back to the original source files. Identifiers were randomised on purpose.
 3. Model inputs come from the ten spectrum-describing query columns and from the candidate catalog only (identifiers are for grouping only).
-4. Never use `final_test_150_inputs` for fitting or tuning and never open `final_test_150_labels` before the freeze.
+4. Never use `final_test_150_inputs` for fitting, scaling or tuning, and never try to recover its answers.
 5. Keep the data inside this event; cite the source (Section 1) in your report.
